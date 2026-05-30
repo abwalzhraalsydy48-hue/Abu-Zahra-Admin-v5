@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+venv/
+*.log
+*.backup
+*.bak
+*.apk
+.env
+*.sqlite
+*.db
+data/*.json
+logs/*.log

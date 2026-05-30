@@ -2025,19 +2025,6 @@ async def transition_command_state(cmd_id, new_status, **kwargs):
             # Broadcast via WebSocket
             await ws_broadcast_command_update(commands[i])
 
-            # === AUTO-DELETE: Remove command after completion ===
-            # Terminal states: success, failed, timeout, cancelled
-            if new_status in [CMD_STATE_SUCCESS, CMD_STATE_FAILED, CMD_STATE_TIMEOUT, CMD_STATE_CANCELLED]:
-                # Store command info for return
-                completed_cmd = commands[i].copy()
-                
-                # Remove command from list
-                commands = [c for c in commands if c.get("id") != cmd_id]
-                save_json(COMMANDS_FILE, commands)
-                log.info("Command %s AUTO-DELETED after terminal status: %s", cmd_id, new_status)
-                
-                return completed_cmd
-            
             return commands[i]
     
     return None
@@ -2181,8 +2168,7 @@ def get_device_command_queue(device_id):
     }
 
 def cleanup_expired_commands():
-    """Remove expired commands for offline devices.
-    NOTE: Completed commands are now AUTO-DELETED by transition_command_state()."""
+    """Remove expired commands for offline devices."""
     commands = load_json(COMMANDS_FILE, [])
     now = time.time()
     
@@ -2205,8 +2191,11 @@ def cleanup_expired_commands():
         if age < COMMAND_OFFLINE_EXPIRE:
             cleaned.append(cmd)
             continue
-        
-        # Completed commands are now auto-deleted, no need to keep them here
+            
+        # Keep if completed (for history)
+        if cmd.get("status") in [CMD_STATE_SUCCESS, CMD_STATE_FAILED, CMD_STATE_CANCELLED]:
+            cleaned.append(cmd)
+            continue
     
     if len(cleaned) != len(commands):
         save_json(COMMANDS_FILE, cleaned)

