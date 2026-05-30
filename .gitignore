@@ -1,15 +1,35 @@
+# Build outputs
+android/.gradle/
+android/app/build/
+android/local.properties
+*.apk
+*.ap_
+*.aab
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
-*.pyd
-.Python
 venv/
-*.log
-*.backup
-*.bak
-*.apk
 .env
-*.sqlite
-*.db
-data/*.json
-logs/*.log
+
+# Backup files
+*.bak
+*.backup*
+server.log
+
+# Data files
+data/
