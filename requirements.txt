@@ -1,0 +1,61 @@
+# Abu-Zahra Server Requirements
+# Production dependencies
+
+# Core
+aiohttp>=3.9.0
+aiofiles>=23.2.0
+
+# Database
+asyncpg>=0.29.0
+aiosqlite>=0.19.0
+SQLAlchemy>=2.0.0
+
+# Cache & Queue
+redis>=5.0.0
+aioredis>=2.0.0
+celery>=5.3.0
+
+# Security
+cryptography>=41.0.0
+pyjwt>=2.8.0
+
+# Observability
+prometheus-client>=0.19.0
+sentry-sdk>=1.38.0
+opentelemetry-api>=1.21.0
+opentelemetry-sdk>=1.21.0
+
+# Utilities
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+orjson>=3.9.0
+httpx>=0.25.0
+
+# Telegram
+python-telegram-bot>=20.0
+
+# Firebase
+firebase-admin>=6.3.0
+
+# Validation
+jsonschema>=4.20.0
+marshmallow>=3.20.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+httpx>=0.25.0
+
+# Development
+black>=23.12.0
+flake8>=6.1.0
+mypy>=1.7.0
+
+# Documentation
+mkdocs>=1.5.0
+mkdocs-material>=9.5.0
+
+# CLI
+click>=8.1.0
+rich>=13.7.0
