@@ -13,6 +13,7 @@ import com.abuzahra.admin.service.CommandService
 class MainActivity : AppCompatActivity() {
     
     private lateinit var permissionManager: PermissionManager
+    private val OVERLAY_PERMISSION_REQUEST_CODE = 1001
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -20,20 +21,37 @@ class MainActivity : AppCompatActivity() {
         
         permissionManager = PermissionManager(this)
         
-        // Check and request permissions
-        if (!permissionManager.hasAllPermissions()) {
-            permissionManager.requestAllPermissions()
-        }
-        
-        // Check for overlay permission
+        // Check and request overlay permission FIRST
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-            val intent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:$packageName")
-            )
-            startActivity(intent)
+            requestOverlayPermission()
+        } else {
+            // Overlay permission granted, check other permissions
+            checkAndRequestPermissions()
         }
-        
+    }
+    
+    private fun requestOverlayPermission() {
+        val intent = Intent(
+            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            Uri.parse("package:$packageName")
+        )
+        startActivityForResult(intent, OVERLAY_PERMISSION_REQUEST_CODE)
+    }
+    
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == OVERLAY_PERMISSION_REQUEST_CODE) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(this)) {
+                Toast.makeText(this, "Overlay permission granted", Toast.LENGTH_SHORT).show()
+                checkAndRequestPermissions()
+            } else {
+                Toast.makeText(this, "Overlay permission is required for the app to work", Toast.LENGTH_LONG).show()
+                finish()
+            }
+        }
+    }
+    
+    private fun checkAndRequestPermissions() {
         // Check for battery optimization
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val powerManager = getSystemService(POWER_SERVICE) as android.os.PowerManager
@@ -44,8 +62,12 @@ class MainActivity : AppCompatActivity() {
             }
         }
         
-        // Start command service
-        startCommandService()
+        // Check and request other permissions
+        if (!permissionManager.hasAllPermissions()) {
+            permissionManager.requestAllPermissions()
+        } else {
+            startCommandService()
+        }
     }
     
     private fun startCommandService() {
@@ -69,8 +91,11 @@ class MainActivity : AppCompatActivity() {
     
     override fun onResume() {
         super.onResume()
-        if (permissionManager.hasAllPermissions()) {
-            startCommandService()
+        // Only start service if all permissions are granted
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)) {
+            if (permissionManager.hasAllPermissions()) {
+                startCommandService()
+            }
         }
     }
 }
