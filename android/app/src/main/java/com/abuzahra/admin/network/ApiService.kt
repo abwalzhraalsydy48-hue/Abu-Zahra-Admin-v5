@@ -13,6 +13,12 @@ import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
+data class LinkResult(
+    val success: Boolean,
+    val deviceId: String = "",
+    val error: String = ""
+)
+
 class ApiService private constructor(private val context: Context) {
     
     companion object {
@@ -34,6 +40,45 @@ class ApiService private constructor(private val context: Context) {
     
     private val baseUrl = "http://216.128.156.226:5000"
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+    
+    /**
+     * Verify link code from the web panel
+     */
+    suspend fun verifyLinkCode(code: String): LinkResult {
+        return withContext(Dispatchers.IO) {
+            try {
+                val json = JSONObject().apply {
+                    put("code", code)
+                }
+                
+                val body = json.toString().toRequestBody(jsonMediaType)
+                val request = Request.Builder()
+                    .url("$baseUrl/api/verify_link")
+                    .post(body)
+                    .build()
+                
+                client.newCall(request).execute().use { response ->
+                    val responseBody = response.body?.string() ?: "{}"
+                    val result = JSONObject(responseBody)
+                    
+                    if (response.isSuccessful && result.optBoolean("ok", false)) {
+                        LinkResult(
+                            success = true,
+                            deviceId = result.optString("device_id", "")
+                        )
+                    } else {
+                        LinkResult(
+                            success = false,
+                            error = result.optString("error", "HTTP ${response.code}")
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("ApiService", "verifyLinkCode error", e)
+                LinkResult(success = false, error = e.message ?: "Unknown error")
+            }
+        }
+    }
     
     suspend fun registerDevice(deviceId: String, deviceInfo: JSONObject): Boolean {
         return withContext(Dispatchers.IO) {
