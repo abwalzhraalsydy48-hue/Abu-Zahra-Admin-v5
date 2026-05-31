@@ -22,6 +22,7 @@ import com.abuzahra.admin.R
 import com.abuzahra.admin.network.ApiService
 import com.abuzahra.admin.utils.DeviceInfo
 import kotlinx.coroutines.*
+import okio.ByteString
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.WebSocket
@@ -194,7 +195,7 @@ class CameraStreamService : Service() {
         buffer.get(bytes)
         
         // Send via WebSocket
-        webSocket?.send(okhttp3.ByteString.of(*bytes))
+        webSocket?.send(ByteString.of(*bytes))
     }
     
     override fun onDestroy() {
