@@ -10,6 +10,10 @@ class PreferenceManager {
         private var instance: PreferenceManager? = null
         private lateinit var prefs: SharedPreferences
         
+        const val KEY_DEVICE_ID = "device_id"
+        const val KEY_REGISTERED = "registered"
+        const val KEY_LAST_SYNC = "last_sync"
+        
         fun init(context: Context) {
             prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
             instance = PreferenceManager()
@@ -83,11 +87,5 @@ class PreferenceManager {
     
     fun getLastSyncTime(): Long {
         return getLong(KEY_LAST_SYNC)
-    }
-    
-    companion object {
-        const val KEY_DEVICE_ID = "device_id"
-        const val KEY_REGISTERED = "registered"
-        const val KEY_LAST_SYNC = "last_sync"
     }
 }
