@@ -3,15 +3,12 @@ name: Build APK
 on:
   push:
     branches: [ main ]
-    paths:
-      - 'android/**'
-      - '.github/workflows/build-apk.yml'
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     
     steps:
     - name: Checkout code
@@ -24,33 +21,24 @@ jobs:
         distribution: 'temurin'
         cache: gradle
         
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v3
+      with:
+        gradle-home-cache-cleanup: true
+        
     - name: Grant execute permission for gradlew
-      working-directory: ./android
-      run: chmod +x gradlew
+      run: chmod +x android/gradlew
       
     - name: Build Debug APK
-      working-directory: ./android
-      run: ./gradlew assembleDebug --no-daemon --stacktrace
-      
-    - name: Rename APK
-      working-directory: ./android/app/build/outputs/apk/debug
-      run: mv app-debug.apk AbuZahra-Admin-v5.0.0.apk || true
+      run: |
+        cd android
+        ./gradlew assembleDebug --no-daemon --stacktrace -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=1g"
+      env:
+        JAVA_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
       
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
-        name: AbuZahra-Admin-v5.0.0
+        name: AbuZahra-Admin-v5
         path: android/app/build/outputs/apk/debug/*.apk
-        
-    - name: Upload to Release
-      if: success()
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: v5.0.0
-        name: Abu-Zahra Admin v5.0.0
-        files: android/app/build/outputs/apk/debug/*.apk
-        draft: false
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
