@@ -24,7 +24,7 @@ import com.abuzahra.admin.R
 import com.abuzahra.admin.network.ApiService
 import com.abuzahra.admin.utils.DeviceInfo
 import kotlinx.coroutines.*
-import okhttp3.ByteString
+import okio.ByteString
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.WebSocket
@@ -172,7 +172,7 @@ class ScreenStreamService : Service() {
         virtualDisplay?.release()
         mediaProjection?.stop()
         imageReader?.setOnImageAvailableListener(null, null)
-        imageReader?.release()
+        imageReader?.close()
         webSocket?.close(1000, null)
         serviceScope.cancel()
     }
