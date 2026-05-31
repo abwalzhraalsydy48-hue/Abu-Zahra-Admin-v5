@@ -5,6 +5,7 @@ import android.util.Log
 import com.abuzahra.admin.utils.DeviceInfo
 import kotlinx.coroutines.*
 import okhttp3.*
+import okio.ByteString
 import java.util.concurrent.TimeUnit
 
 class WebSocketManager private constructor(private val context: Context) {
